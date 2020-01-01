@@ -5,7 +5,9 @@
 #   define Assert(...)
 #   define CheckPos(E, ...) E
 #   define CheckNeg(E, ...) E
-#   define InvalidCodePath
+#   define InvalidCodePath __builtin_unreachable()
+#   define InvalidDefaultCase
+#   define static_assert _Static_assert
 #else
 #   include <assert.h>
 #   define Assert(E) assert(E)
@@ -13,6 +15,7 @@
 #   define CheckNeg(E, V) assert(V != (E))
 #   include <stdlib.h>
 #   define InvalidCodePath abort()
+#   define InvalidDefaultCase default: InvalidCodePath;
 #endif
 
 #include <stdio.h>
