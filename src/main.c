@@ -10,20 +10,24 @@
 #include <dirent.h>
 
 static u32 Flags = 0;
-static u32 Number = 1;
 
 static struct tm *Date = 0;
-static u32 Year  = 1970;
-static u32 Month = 1;
-static u32 Day   = 1;
+static s32 Year  = 1970;
+static s32 Month = 1;
+static s32 Day   = 1;
 
 enum Flags {
-    ANY  = 0x1 << 0,
-    YEAR = 0x1 << 1,
-    EDIT = 0x1 << 2,
-    NEW  = 0x1 << 3,
-    PAY  = 0x1 << 4,
+    ANY     = 1 << 0,
+    YEAR    = 1 << 1,
+    EDIT    = 1 << 2,
+    NEW_PAY = 1 << 3,
+    PAY     = 1 << 4,
+    CREATE  = 1 << 5,
 };
+
+static char *ProgramName;
+
+
 
 static
 bool StringsAreEqual(char *A, char *B) {
@@ -65,15 +69,14 @@ bool StringStartsWith(char *A, char *B) {
 
 static
 void ProcessFlag(char *Flag) {
+    Assert(Flag);
+
     enum {
         ACTION_NONE,
         ACTION_MONTHS,
         ACTION_YEARS,
     } Action = ACTION_NONE;
 
-    if (!Flag) {
-        /* ignore null flag */
-    }
     if (StringsAreEqual(Flag, "all")) {
         Flags |= YEAR;
         Year = 0;
@@ -81,8 +84,8 @@ void ProcessFlag(char *Flag) {
     else if (StringsAreEqual(Flag, "edit")) {
         Flags |= EDIT;
     }
-    else if (StringsAreEqual(Flag, "new")) {
-        Flags |= EDIT | NEW;
+    else if (StringsAreEqual(Flag, "new-pay")) {
+        Flags |= PAY | NEW_PAY;
     }
     else if (StringsAreEqual(Flag, "help")) {
         /* TODO(lrak): print help */
@@ -96,6 +99,12 @@ void ProcessFlag(char *Flag) {
         if (!Year) {
             Year = Date->tm_year + 1900;
         }
+    }
+    else if (StringsAreEqual(Flag, "pay")) {
+        Flags |= PAY;
+    }
+    else if (StringsAreEqual(Flag, "create")) {
+        Flags |= CREATE;
     }
     else if (StringsAreEqual(Flag, "last-month")) {
         Flag = "months-ago=1";
@@ -111,9 +120,6 @@ void ProcessFlag(char *Flag) {
     else if (StringStartsWith(Flag, "months-ago=")) {
         Action = ACTION_MONTHS;
     }
-    else if (StringStartsWith(Flag, "new-pay")) {
-        Flags |= PAY;
-    }
     else {
         /* TODO(lrak): error on unknown */
         fprintf(stderr, "WARNING: unknown flag --%s\n", Flag);
@@ -122,9 +128,10 @@ void ProcessFlag(char *Flag) {
     switch (Action) {
         s32 n;
     case ACTION_MONTHS:
-        n = atoi(Flag + 11); /* skip past "months-agl=" */
+        n = atoi(Flag + 11); /* skip past "months-ago=" */
 
         Flags |= ANY;
+        Flags &= ~PAY;
         Year  = Date->tm_year + 1900;
         Month = Date->tm_mon + 1;
 
@@ -133,7 +140,7 @@ void ProcessFlag(char *Flag) {
             --Month;
             if (Month == 0) {
                 Month = 12;
-                --Year; /* TODO(lrak): bounds check */
+                --Year;
             }
         }
 
@@ -142,26 +149,87 @@ void ProcessFlag(char *Flag) {
     case ACTION_YEARS:
         n = atoi(Flag + 10); /* skip past "years-ago=" */
 
-        Flags |= ANY;
+        Flags |= ANY | YEAR;
         Flags &= ~PAY;
         Year  = Date->tm_year + 1900;
         Month = Date->tm_mon + 1;
 
-        Year -= n; /* TODO(lrak): bounds check */
+        Year -= n;
 
         break;
 
     case ACTION_NONE: break;
-                      InvalidDefaultCase
+    InvalidDefaultCase
     }
 }
 
-s32 main(s32 Count, char **Args, char **Env) {
-    s32 FirstArg = 2;
-    char *NewArgs[(mm)Count + (mm)FirstArg]; /* C99 VLA. TODO(lrak): remove? */
-    s32 NewCount = 0;
+static inline
+bool EnsureDirectory(char *Path) {
+    bool Success = false;
+
+    /* TODO(lrak): don't do a fork */
+    pid_t Id = fork();
+    if (Id == 0) {
+        /* child, becomes some other program */
+
+        execlp("mkdir", ProgramName, "-p", Path, NULL);
+
+        Unreachable;
+    }
+    else {
+        /* parent, waits for child to finish */
+
+        s32 ChildStatus = -1;
+        if (waitpid(Id, &ChildStatus, 0) < 0) {
+            /* TODO(lrak): error handling */
+            NotImplemented;
+        }
+
+        Success = (ChildStatus == 0);
+    }
+
+    return Success;
+}
+
+static
+void Delegate(char *Path, bool Edit)
+{
+    static s32 NumPrinted = 0;
+
+    /* put a space between multiple calls */
+    if (NumPrinted++) printf("\n");
+
+    pid_t Id = fork();
+    if (Id == 0) {
+        /* child, becomes some other program */
+        if (Edit) {
+            execlp("nvim", ProgramName, "+/^$/-1", Path, NULL);
+        }
+        else {
+            execlp("spreadsheet", ProgramName, Path, NULL);
+        }
+
+        Unreachable;
+    }
+    else {
+        /* parent, waits for child to finish */
+
+        if (waitpid(Id, 0, 0) < 0) {
+            NotImplemented;
+        }
+    }
+}
+
+s32 main(s32 ArgCount, char **Args, char **Env)
+{
     char *Home = 0;
-    char *Path = "Documents/Finances";
+    char *Finances = "Documents/Finances";
+
+    /* TODO(lrak): 1024 characters should be enough for anyone */
+    static char AbsolutePath[1024];
+    char *BufferEnd = AbsolutePath + sizeof AbsolutePath;
+
+    ProgramName = Args[0];
 
     for (char **Cur = Env; *Cur; ++Cur) {
         if (StringStartsWith(*Cur, "HOME=")) {
@@ -181,142 +249,135 @@ s32 main(s32 Count, char **Args, char **Env) {
     Month = (u32)Date->tm_mon + 1;
     Day   = (u32)Date->tm_mday;
 
-    for (s32 Idx = 1; Idx < Count; ++Idx)
+    s32 ModifiedArgCount = 1;
+    for (s32 Index = 1; Index < ArgCount; ++Index)
     {
-        char *Arg = Args[Idx];
+        static bool Armed = true;
+        char *Arg = Args[Index];
 
-        if (Arg[0] == '-') {
+        if (Armed && Arg[0] == '-') {
             if (Arg[1] == '-') {
-                ProcessFlag(Arg + 2);
-            }
-            else {
-                for (char *Cur = Arg + 1; *Cur; ++Cur) {
-                    char *LongForm = 0;
-
-                    switch (*Cur) {
-                    case 'a': LongForm = "all";        break;
-                    case 'p': LongForm = "new-pay";    break;
-                    case 'e': LongForm = "edit";       break;
-                    case 'n': LongForm = "new";        break;
-                    case 'y': LongForm = "year";       break;
-                    case 'm': LongForm = "month";      break;
-                    case 'l': LongForm = "last-month"; break;
-                    case 'L': LongForm = "last-year";  break;
-                    case 'h': LongForm = "help";       break;
-                    }
-
-                    ProcessFlag(LongForm);
+                if (!Arg[2]) {
+                    /* got argument "--", disarm the flag parser */
+                    Armed = false;
+                }
+                else {
+                    ProcessFlag(Arg + 2);
                 }
             }
+            else for (char *Cur = Arg + 1; *Cur; ++Cur) {
+                switch (*Cur) {
+                case 'a': ProcessFlag("all");        break;
+                case 'p': ProcessFlag("pay");        break;
+                case 'e': ProcessFlag("edit");       break;
+                case 'n': ProcessFlag("new-pay");    break;
+                case 'y': ProcessFlag("year");       break;
+                case 'm': ProcessFlag("month");      break;
+                case 'l': ProcessFlag("last-month"); break;
+                case 'L': ProcessFlag("last-year");  break;
+                case 'h': ProcessFlag("help");       break;
+                case 'c': ProcessFlag("create");     break;
+
+                default:
+                    /* TODO(lrak): error on unknown */
+                    fprintf(stderr, "WARNING: unrecognized flag -%c\n", *Cur);
+                    break;
+                }
+            }
+
         }
         else {
-            Assert(NewCount < Count);
-            NewArgs[FirstArg + NewCount++] = Arg;
+            Assert(ModifiedArgCount < ArgCount);
+            Args[ModifiedArgCount++] = Arg;
         }
     }
 
-    NewArgs[FirstArg + NewCount] = 0;
+    char *RelativePath = AbsolutePath +
+        snprintf(AbsolutePath, sizeof AbsolutePath, "%s/%s/", Home, Finances);
+    Assert(RelativePath < BufferEnd);
 
-    if (Flags & PAY) {
-        /* TODO(lrak): 1024 characters should be enough for anyone */
-        static char Buffer[1024];
-        snprintf(Buffer, sizeof Buffer, "%s/%s/%u/pay", Home, Path, Year);
-
-        DIR *Pay = opendir(Buffer);
-        Assert(Pay); /* TODO(lrak): error checking */
-
-        Number = 0;
-        struct dirent *Dir;
-        while ((Dir = readdir(Pay))) {
-            if (StringStartsWith(Dir->d_name, ".")) continue;
-
-            char *Tail;
-            s64 Num = strtol(Dir->d_name, &Tail, 10);
-            if (Num > (s64)Number && (!*Tail || *Tail == '.')) {
-                Number = (u32)Num;
-            }
+    if (Flags & ANY || (ModifiedArgCount == 1 && !(Flags & PAY))) {
+        if (Flags & YEAR) {
+            snprintf(RelativePath, RelativePath - BufferEnd, "%04d.tsv", Year);
         }
-
-        closedir(Pay);
-
-        if (Flags & NEW) {
-            Number += 1;
+        else {
+            snprintf(RelativePath, RelativePath - BufferEnd,
+                     "%04d/%02d.tsv", Year, Month);
         }
 
         if (Flags & EDIT) {
-            snprintf(Buffer, sizeof Buffer, "%s/%s/%u/pay/%02d.tsv",
-                            Home, Path, Year, Number);
-
-            FILE *NewFile = fopen(Buffer, "w");
-            Assert(NewFile);
-
-            /* TODO(lrak): find a better templating mechanism (0000/pay/00.tsv?) */
-            fprintf(NewFile, "=sum(A2:)\tMeans\tDescription\n\n");
-            fprintf(NewFile, "#:width 16 20 64\n");
-            fprintf(NewFile, "#:align r\n");
-            fprintf(NewFile, "#:print head_sep\n");
-            fprintf(NewFile, "# vim: noet ts=21 sw=21\n");
-
-            fclose(NewFile);
+            /* TODO(lrak): ensure file exists. Create it if it doesn't */
         }
 
-        snprintf(Buffer, sizeof Buffer, "%u/pay/%02d", Year, Number);
-
-        Assert(FirstArg > 0);
-        Assert(NewCount < Count);
-
-        NewArgs[--FirstArg] = Buffer;
-        ++NewCount;
+        Delegate(AbsolutePath, Flags & EDIT);
     }
 
-    if (!NewCount || Flags & ANY) {
-        /* TODO(lrak): 128 characters should be enough for anyone */
-        static char Buffer[128];
+    if (Flags & PAY) {
+        DIR *Pay;
 
-        if (Flags & YEAR) {
-            snprintf(Buffer, sizeof Buffer, "%04d", Year);
+        char *FileComponent = RelativePath +
+            snprintf(RelativePath, RelativePath - BufferEnd, "%04d/pay", Year);
+        Assert(FileComponent < BufferEnd);
+
+        if (!EnsureDirectory(AbsolutePath)) {
+            NotImplemented;
+        }
+        else if (!(Pay = opendir(AbsolutePath))) {
+            NotImplemented;
         }
         else {
-            snprintf(Buffer, sizeof Buffer, "%04d/%02d", Year, Month);
+            struct dirent *Dir;
+            u32 Number = 0;
+
+            while ((Dir = readdir(Pay))) {
+                if (StringStartsWith(Dir->d_name, ".")) continue;
+
+                char *Tail;
+                s64 ThisNumber = strtol(Dir->d_name, &Tail, 10);
+                if (ThisNumber > (s64)Number && (!*Tail || *Tail == '.')) {
+                    Number = (u32)ThisNumber;
+                }
+            }
+
+            closedir(Pay);
+
+            if (Flags & NEW_PAY) {
+                Number += 1;
+            }
+
+            snprintf(FileComponent, FileComponent - BufferEnd,
+                     "/%02d.tsv", Number);
+
+            if (Flags & NEW_PAY) {
+                FILE *NewFile = fopen(AbsolutePath, "w");
+                Assert(NewFile);
+
+                /* TODO(lrak): find a better templating mechanism (0000/pay/00.tsv?) */
+                fprintf(NewFile,
+                        "=sum(A2:)\tMeans\tDescription\n"
+                        "\n"
+                        "#:width 16 20 64\n"
+                        "#:align r\n"
+                        "#:print head_sep\n"
+                        "# vim: noet ts=21 sw=21\n");
+
+                fclose(NewFile);
+            }
+
+            Delegate(AbsolutePath, Flags & NEW_PAY);
         }
-
-        Assert(FirstArg > 0);
-        Assert(NewCount < Count);
-
-        NewArgs[--FirstArg] = Buffer;
-        ++NewCount;
     }
 
+    for (s32 Index = 1; Index < ModifiedArgCount; ++Index) {
+        char *Arg = Args[Index];
 
-    char FileName[1024]; /* TODO(lrak): 1024 characters should be enough for anyone */
-    for (s32 Idx = 0; Idx < NewCount; ++Idx) {
-        char *Arg = NewArgs[FirstArg + Idx];
+        snprintf(RelativePath, RelativePath - BufferEnd, "%s.tsv", Arg);
 
-        snprintf(FileName, sizeof FileName, "%s/%s/%s.tsv", Home, Path, Arg);
-        if (Idx) printf("\n");
-
-        pid_t Id = fork();
-        if (Id == 0) {
-            /* child, becomes some other program */
-            if (Flags & EDIT) {
-                execlp("nvim", Args[0], "+/^$/-1", FileName, NULL);
-            }
-            else {
-                execlp("spreadsheet", Args[0], FileName, NULL);
-            }
-
-            /* unreachable */
-            InvalidCodePath;
+        if (Flags & CREATE) {
+            /* TODO(lrak): try to create this file if it doesn't exist */
         }
-        else {
-            /* parent, waits for child to finish */
 
-            if (waitpid(Id, 0, 0) < 0) {
-                /* TODO(lrak): error handling */
-                InvalidCodePath;
-            }
-
-        }
+        Delegate(AbsolutePath, Flags & EDIT);
     }
 
     return 0;

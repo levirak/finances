@@ -1,11 +1,14 @@
 #ifndef main_h
 #define main_h
 
+#define Unreachable __builtin_unreachable()
+#define NotImplemented __builtin_trap()
+
 #ifdef NDEBUG
 #   define Assert(...)
 #   define CheckPos(E, ...) E
 #   define CheckNeg(E, ...) E
-#   define InvalidCodePath __builtin_unreachable()
+#   define InvalidCodePath Unreachable
 #   define InvalidDefaultCase
 #   define static_assert _Static_assert
 #else
