@@ -9,25 +9,21 @@
 #include <fcntl.h>
 #include <dirent.h>
 
-static u32 Flags = 0;
-
-static struct tm *Date = 0;
-static s32 Year  = 1970;
-static s32 Month = 1;
-static s32 Day   = 1;
-
-enum Flags {
+static enum Flags {
     ANY     = 1 << 0,
     YEAR    = 1 << 1,
     EDIT    = 1 << 2,
     NEW_PAY = 1 << 3,
     PAY     = 1 << 4,
     CREATE  = 1 << 5,
-};
+} Flags = 0;
 
-static char *ProgramName;
+static char *ProgramName = "finances";
 
-
+static struct tm *Date = 0;
+static s32 Year  = 1970;
+static s32 Month = 1;
+static s32 Day   = 1;
 
 static
 bool StringsAreEqual(char *A, char *B) {
@@ -88,6 +84,7 @@ void ProcessFlag(char *Flag) {
         Flags |= PAY | NEW_PAY;
     }
     else if (StringsAreEqual(Flag, "help")) {
+        printf("I.O.U. one help page. Sorry.\n");
         /* TODO(lrak): print help */
     }
     else if (StringsAreEqual(Flag, "year")) {
@@ -131,7 +128,7 @@ void ProcessFlag(char *Flag) {
         n = atoi(Flag + 11); /* skip past "months-ago=" */
 
         Flags |= ANY;
-        Flags &= ~PAY;
+        Flags &= ~(PAY | YEAH);
         Year  = Date->tm_year + 1900;
         Month = Date->tm_mon + 1;
 
@@ -297,6 +294,8 @@ s32 main(s32 ArgCount, char **Args, char **Env)
     Assert(RelativePath < BufferEnd);
 
     if (Flags & ANY || (ModifiedArgCount == 1 && !(Flags & PAY))) {
+        bool EditFile = Flags & EDIT;
+
         if (Flags & YEAR) {
             snprintf(RelativePath, RelativePath - BufferEnd, "%04d.tsv", Year);
         }
@@ -305,21 +304,22 @@ s32 main(s32 ArgCount, char **Args, char **Env)
                      "%04d/%02d.tsv", Year, Month);
         }
 
-        if (Flags & EDIT) {
+        if (EditFile) {
             /* TODO(lrak): ensure file exists. Create it if it doesn't */
         }
 
-        Delegate(AbsolutePath, Flags & EDIT);
+        Delegate(AbsolutePath, EditFile);
     }
 
     if (Flags & PAY) {
         DIR *Pay;
+        bool EditFile = Flags & NEW_PAY;
 
         char *FileComponent = RelativePath +
             snprintf(RelativePath, RelativePath - BufferEnd, "%04d/pay", Year);
         Assert(FileComponent < BufferEnd);
 
-        if (!EnsureDirectory(AbsolutePath)) {
+        if (EditFile && !EnsureDirectory(AbsolutePath)) {
             NotImplemented;
         }
         else if (!(Pay = opendir(AbsolutePath))) {
@@ -341,14 +341,14 @@ s32 main(s32 ArgCount, char **Args, char **Env)
 
             closedir(Pay);
 
-            if (Flags & NEW_PAY) {
+            if (EditFile) {
                 Number += 1;
             }
 
             snprintf(FileComponent, FileComponent - BufferEnd,
                      "/%02d.tsv", Number);
 
-            if (Flags & NEW_PAY) {
+            if (EditFile) {
                 FILE *NewFile = fopen(AbsolutePath, "w");
                 Assert(NewFile);
 
@@ -364,7 +364,7 @@ s32 main(s32 ArgCount, char **Args, char **Env)
                 fclose(NewFile);
             }
 
-            Delegate(AbsolutePath, Flags & NEW_PAY);
+            Delegate(AbsolutePath, EditFile);
         }
     }
 
