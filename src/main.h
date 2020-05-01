@@ -4,21 +4,29 @@
 #define Unreachable __builtin_unreachable()
 #define NotImplemented __builtin_trap()
 
+/* generic things */
+
 #ifdef NDEBUG
 #   define Assert(...)
-#   define CheckPos(E, ...) E
-#   define CheckNeg(E, ...) E
+#   define CheckEq(E, ...) E
+#   define CheckNe(E, ...) E
+#   define CheckGt(E, ...) E
+#   define CheckLt(E, ...) E
+#   define CheckGe(E, ...) E
+#   define CheckLe(E, ...) E
 #   define InvalidCodePath Unreachable
-#   define InvalidDefaultCase
-#   define static_assert _Static_assert
+#   define InvalidDefaultCase default: Unreachable
 #else
 #   include <assert.h>
 #   define Assert(E) assert(E)
-#   define CheckPos(E, V) assert(V == (E))
-#   define CheckNeg(E, V) assert(V != (E))
-#   include <stdlib.h>
-#   define InvalidCodePath abort()
-#   define InvalidDefaultCase default: InvalidCodePath;
+#   define CheckEq(E, V) assert((E) == (V))
+#   define CheckNe(E, V) assert((E) != (V))
+#   define CheckGt(E, V) assert((E) > (V))
+#   define CheckLt(E, V) assert((E) < (V))
+#   define CheckGe(E, V) assert((E) >= (V))
+#   define CheckLe(E, V) assert((E) <= (V))
+#   define InvalidCodePath Assert(!"invalid code path")
+#   define InvalidDefaultCase default: InvalidCodePath
 #endif
 
 #include <stdio.h>

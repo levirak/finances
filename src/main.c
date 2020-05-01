@@ -1,22 +1,33 @@
 #include "main.h"
 
+#include <dirent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/wait.h>
 
-#include <fcntl.h>
-#include <dirent.h>
+static struct flags {
+    bool Any: 1; /* indicates that "any records were specified by flags" */
 
-static enum Flags {
-    ANY     = 1 << 0,
-    YEAR    = 1 << 1,
-    EDIT    = 1 << 2,
-    NEW_PAY = 1 << 3,
-    PAY     = 1 << 4,
-    CREATE  = 1 << 5,
-} Flags = 0;
+    enum { /* record type to access */
+        RECORD_MONTH = 0, /* default */
+        RECORD_YEAR,
+        RECORD_PAY,
+        RECORD_TEMPLATE,
+    } Record: 2;
+
+    bool Edit: 1;     /* edit any records specified*/
+    bool NewPay: 1;   /* make a new payment record */
+    bool Pay: 1;      /* access the payment record */
+    bool Create: 1;   /* arg specified records should be created */
+    bool Template: 1; /* access the template record */
+} Flags = { 0 };
+
+static_assert(sizeof Flags == sizeof (s32), "Flags struct is larger than expected");
 
 static char *ProgramName = "finances";
 
@@ -34,24 +45,6 @@ bool StringsAreEqual(char *A, char *B) {
 
     return *A == *B;
 }
-
-#if 0
-static
-mm BufferString(char *Buffer, mm Size, char *Str) {
-    Assert(Size);
-
-    char *End = Buffer + Size - 1;
-    char *Cur = Str;
-
-    while (*Cur && Buffer < End) {
-        *Buffer++ = *Cur++;
-    }
-
-    *Buffer = 0;
-
-    return (mm)(Cur - Str);
-}
-#endif
 
 static
 bool StringStartsWith(char *A, char *B) {
@@ -71,37 +64,43 @@ void ProcessFlag(char *Flag) {
         ACTION_NONE,
         ACTION_MONTHS,
         ACTION_YEARS,
+        ACTION_TEMPLATE,
     } Action = ACTION_NONE;
 
     if (StringsAreEqual(Flag, "all")) {
-        Flags |= YEAR;
+        Flags.Any = 1;
+        Flags.Record = RECORD_YEAR;
         Year = 0;
     }
     else if (StringsAreEqual(Flag, "edit")) {
-        Flags |= EDIT;
+        Flags.Edit = 1;
     }
     else if (StringsAreEqual(Flag, "new-pay")) {
-        Flags |= PAY | NEW_PAY;
+        Flags.Record = RECORD_PAY;
+        Flags.NewPay = 1;
     }
     else if (StringsAreEqual(Flag, "help")) {
         printf("I.O.U. one help page. Sorry.\n");
         /* TODO(lrak): print help */
     }
     else if (StringsAreEqual(Flag, "year")) {
-        Flags |= YEAR;
+        Flags.Any = 1;
+        Flags.Record = RECORD_YEAR;
     }
     else if (StringsAreEqual(Flag, "month")) {
-        Flags &= ~YEAR;
+        Flags.Any = 1;
+        Flags.Record = RECORD_MONTH;
 
         if (!Year) {
             Year = Date->tm_year + 1900;
         }
     }
     else if (StringsAreEqual(Flag, "pay")) {
-        Flags |= PAY;
+        Flags.Any = 1;
+        Flags.Record = RECORD_PAY;
     }
     else if (StringsAreEqual(Flag, "create")) {
-        Flags |= CREATE;
+        Flags.Create = 1;
     }
     else if (StringsAreEqual(Flag, "last-month")) {
         Flag = "months-ago=1";
@@ -110,6 +109,9 @@ void ProcessFlag(char *Flag) {
     else if (StringsAreEqual(Flag, "last-year")) {
         Flag = "years-ago=1";
         Action = ACTION_YEARS;
+    }
+    else if (StringsAreEqual(Flag, "template")) {
+        Action = ACTION_TEMPLATE;
     }
     else if (StringStartsWith(Flag, "years-ago=")) {
         Action = ACTION_YEARS;
@@ -127,8 +129,8 @@ void ProcessFlag(char *Flag) {
     case ACTION_MONTHS:
         n = atoi(Flag + 11); /* skip past "months-ago=" */
 
-        Flags |= ANY;
-        Flags &= ~(PAY | YEAH);
+        Flags.Any = 1;
+        Flags.Record = RECORD_MONTH;
         Year  = Date->tm_year + 1900;
         Month = Date->tm_mon + 1;
 
@@ -146,8 +148,8 @@ void ProcessFlag(char *Flag) {
     case ACTION_YEARS:
         n = atoi(Flag + 10); /* skip past "years-ago=" */
 
-        Flags |= ANY | YEAR;
-        Flags &= ~PAY;
+        Flags.Any = 1;
+        Flags.Record = RECORD_YEAR;
         Year  = Date->tm_year + 1900;
         Month = Date->tm_mon + 1;
 
@@ -155,8 +157,14 @@ void ProcessFlag(char *Flag) {
 
         break;
 
+    case ACTION_TEMPLATE:
+        Flags.Any = 1;
+        Flags.Record = RECORD_TEMPLATE;
+
+        break;
+
     case ACTION_NONE: break;
-    InvalidDefaultCase
+    InvalidDefaultCase;
     }
 }
 
@@ -217,14 +225,78 @@ void Delegate(char *Path, bool Edit)
     }
 }
 
+static
+void WritePath(char *Buffer, mm BufSize, char *Root, s32 Year, s32 Month)
+{
+    if (Flags.Record == RECORD_YEAR) {
+        snprintf(Buffer, BufSize, "%s/%04d.tsv", Root, Year);
+    }
+    else {
+        snprintf(Buffer, BufSize, "%s/%04d/%02d.tsv", Root, Year, Month);
+    }
+}
+
+static
+void WritePayDirPath(char *Buffer, mm BufSize, char *Root, s32 Year)
+{
+    snprintf(Buffer, BufSize, "%s/%04d/pay", Root, Year);
+}
+
+static
+void WritePayPath(char *Buffer, mm BufSize, char *Root, s32 Year, s32 Number)
+{
+    snprintf(Buffer, BufSize, "%s/%04d/pay/%02d.tsv", Root, Year, Number);
+}
+
+static
+void Copy(char *SourcePath, char *DestinationPath) {
+    /* TODO(lrak): return value */
+    fd Template = open(SourcePath, O_RDONLY);
+
+    if (Template < 0) {
+        fprintf(stderr, "ERROR: Could not open template %s\n",
+                SourcePath);
+    }
+    else {
+        struct stat Stat;
+        fstat(Template, &Stat);
+        mode_t Mode = Stat.st_mode;
+
+        /* get ahold of our new file */
+        fd Out = open(DestinationPath, O_WRONLY | O_CREAT | O_EXCL, Mode);
+
+        if (Out < 0) {
+            /* TODO(lrak): error handling */
+            NotImplemented;
+        }
+        else {
+            char Buffer[1024];
+
+            smm BytesRead = 0;
+            while ((BytesRead = read(Template, Buffer, sizeof Buffer)) > 0) {
+                smm BytesWritten = write(Out, Buffer, BytesRead);
+
+                if (BytesWritten != BytesRead) {
+                    /* TODO(lrak): error handling */
+                    NotImplemented;
+                }
+            }
+
+            CheckEq(close(Out), 0);
+        }
+
+        CheckEq(close(Template), 0);
+    }
+}
+
 s32 main(s32 ArgCount, char **Args, char **Env)
 {
     char *Home = 0;
-    char *Finances = "Documents/Finances";
 
-    /* TODO(lrak): 1024 characters should be enough for anyone */
-    static char AbsolutePath[1024];
-    char *BufferEnd = AbsolutePath + sizeof AbsolutePath;
+    static char RootPath[512] = "";
+#define MaxPath 1024 /* TODO(lrak): 1024 characters should be enough for anyone */
+    static char SourcePath[MaxPath];
+    static char DestinationPath[MaxPath];
 
     ProgramName = Args[0];
 
@@ -238,6 +310,11 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         fprintf(stderr, "ERROR: no HOME environment variable\n");
         return -1;
     }
+
+    char *Finances = "Documents/Finances";
+    snprintf(RootPath, sizeof RootPath, "%s/%s", Home, Finances);
+
+
 
     time_t UnixTime = time(0);
     Date = localtime(&UnixTime);
@@ -274,6 +351,7 @@ s32 main(s32 ArgCount, char **Args, char **Env)
                 case 'L': ProcessFlag("last-year");  break;
                 case 'h': ProcessFlag("help");       break;
                 case 'c': ProcessFlag("create");     break;
+                case 't': ProcessFlag("template");   break;
 
                 default:
                     /* TODO(lrak): error on unknown */
@@ -289,40 +367,35 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         }
     }
 
-    char *RelativePath = AbsolutePath +
-        snprintf(AbsolutePath, sizeof AbsolutePath, "%s/%s/", Home, Finances);
-    Assert(RelativePath < BufferEnd);
+    if (Flags.Any || ModifiedArgCount == 1) switch (Flags.Record) {
+    case RECORD_MONTH:
+    case RECORD_YEAR: {
+        WritePath(DestinationPath, MaxPath, RootPath, Year, Month);
 
-    if (Flags & ANY || (ModifiedArgCount == 1 && !(Flags & PAY))) {
-        bool EditFile = Flags & EDIT;
-
-        if (Flags & YEAR) {
-            snprintf(RelativePath, RelativePath - BufferEnd, "%04d.tsv", Year);
-        }
-        else {
-            snprintf(RelativePath, RelativePath - BufferEnd,
-                     "%04d/%02d.tsv", Year, Month);
+        if (Flags.Edit || Flags.Create) {
+            if ((access(DestinationPath, F_OK) == -1)) {
+                WritePath(SourcePath, MaxPath, RootPath, 0, Month);
+                Copy(SourcePath, DestinationPath);
+            }
         }
 
-        if (EditFile) {
-            /* TODO(lrak): ensure file exists. Create it if it doesn't */
-        }
+        Delegate(DestinationPath, Flags.Edit);
+    } break;
 
-        Delegate(AbsolutePath, EditFile);
-    }
+    case RECORD_TEMPLATE: {
+        WritePath(DestinationPath, MaxPath, RootPath, 0, Month);
+        Delegate(DestinationPath, Flags.Edit);
+    } break;
 
-    if (Flags & PAY) {
+    case RECORD_PAY: {
         DIR *Pay;
-        bool EditFile = Flags & NEW_PAY;
 
-        char *FileComponent = RelativePath +
-            snprintf(RelativePath, RelativePath - BufferEnd, "%04d/pay", Year);
-        Assert(FileComponent < BufferEnd);
+        WritePayDirPath(DestinationPath, MaxPath, RootPath, Year);
 
-        if (EditFile && !EnsureDirectory(AbsolutePath)) {
+        if (Flags.Edit && !EnsureDirectory(DestinationPath)) {
             NotImplemented;
         }
-        else if (!(Pay = opendir(AbsolutePath))) {
+        else if (!(Pay = opendir(DestinationPath))) {
             NotImplemented;
         }
         else {
@@ -341,43 +414,37 @@ s32 main(s32 ArgCount, char **Args, char **Env)
 
             closedir(Pay);
 
-            if (EditFile) {
+            if (Flags.NewPay) {
                 Number += 1;
             }
 
-            snprintf(FileComponent, FileComponent - BufferEnd,
-                     "/%02d.tsv", Number);
+            WritePayPath(DestinationPath, MaxPath, RootPath, Year, Number);
 
-            if (EditFile) {
-                FILE *NewFile = fopen(AbsolutePath, "w");
-                Assert(NewFile);
-
-                /* TODO(lrak): find a better templating mechanism (0000/pay/00.tsv?) */
-                fprintf(NewFile,
-                        "=sum(A2:)\tMeans\tDescription\n"
-                        "\n"
-                        "#:width 16 20 64\n"
-                        "#:align r\n"
-                        "#:print head_sep\n"
-                        "# vim: noet ts=21 sw=21\n");
-
-                fclose(NewFile);
+            if (Flags.Edit || Flags.Create || Flags.NewPay) {
+                if ((access(DestinationPath, F_OK) == -1)) {
+                    WritePayPath(SourcePath, MaxPath, RootPath, 0, 0);
+                    Copy(SourcePath, DestinationPath);
+                }
             }
 
-            Delegate(AbsolutePath, EditFile);
+            Delegate(DestinationPath, Flags.Edit);
         }
+    } break;
+
+    InvalidDefaultCase;
     }
+
 
     for (s32 Index = 1; Index < ModifiedArgCount; ++Index) {
         char *Arg = Args[Index];
 
-        snprintf(RelativePath, RelativePath - BufferEnd, "%s.tsv", Arg);
+        snprintf(DestinationPath, MaxPath, "%s/%s.tsv", RootPath, Arg);
 
-        if (Flags & CREATE) {
+        if (Flags.Create) {
             /* TODO(lrak): try to create this file if it doesn't exist */
         }
 
-        Delegate(AbsolutePath, Flags & EDIT);
+        Delegate(DestinationPath, Flags.Edit);
     }
 
     return 0;
