@@ -8,6 +8,7 @@
 
 #ifdef NDEBUG
 #   define Assert(...)
+#   define static_assert(...) _Static_assert(__VA_ARGS__)
 #   define CheckEq(E, ...) E
 #   define CheckNe(E, ...) E
 #   define CheckGt(E, ...) E

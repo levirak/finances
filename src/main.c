@@ -10,6 +10,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define MaxPath 1024 /* TODO(lrak): 1024 characters should be enough for anyone */
+
 static struct flags {
     bool Any: 1; /* indicates that "any records were specified by flags" */
 
@@ -248,6 +250,34 @@ void WritePayPath(char *Buffer, mm BufSize, char *Root, s32 Year, s32 Number)
     snprintf(Buffer, BufSize, "%s/%04d/pay/%02d.tsv", Root, Year, Number);
 }
 
+/* NOTE: assums that `Out` is at least as big as `Path` */
+static
+char *DirName(char *Path, char *Out)
+{
+    strcpy(Out, Path);
+
+    char *Last = 0;
+
+    for (char *Cur = Out; *Cur; ++Cur) {
+        if (*Cur == '/') Last = Cur;
+    }
+
+    if (!Last) {
+        /* there is no directory component, use CWD */
+        strcpy(Out, ".");
+    }
+    else if (Last == Out) {
+        /* this file lives in the root directory */
+        strcpy(Out, "/");
+    }
+    else {
+        /* truncate the string at the last dirsep */
+        *Last = 0;
+    }
+
+    return Out;
+}
+
 static
 void Copy(char *SourcePath, char *DestinationPath) {
     /* TODO(lrak): return value */
@@ -261,6 +291,9 @@ void Copy(char *SourcePath, char *DestinationPath) {
         struct stat Stat;
         fstat(Template, &Stat);
         mode_t Mode = Stat.st_mode;
+
+        char DestDir[MaxPath];
+        EnsureDirectory(DirName(DestinationPath, DestDir));
 
         /* get ahold of our new file */
         fd Out = open(DestinationPath, O_WRONLY | O_CREAT | O_EXCL, Mode);
@@ -294,7 +327,6 @@ s32 main(s32 ArgCount, char **Args, char **Env)
     char *Home = 0;
 
     static char RootPath[512] = "";
-#define MaxPath 1024 /* TODO(lrak): 1024 characters should be enough for anyone */
     static char SourcePath[MaxPath];
     static char DestinationPath[MaxPath];
 
@@ -392,7 +424,7 @@ s32 main(s32 ArgCount, char **Args, char **Env)
 
         WritePayDirPath(DestinationPath, MaxPath, RootPath, Year);
 
-        if (Flags.Edit && !EnsureDirectory(DestinationPath)) {
+        if (!EnsureDirectory(DestinationPath)) {
             NotImplemented;
         }
         else if (!(Pay = opendir(DestinationPath))) {
