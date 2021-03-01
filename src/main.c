@@ -39,7 +39,8 @@ static s32 Month = 1;
 static s32 Day   = 1;
 
 static
-bool StringsAreEqual(char *A, char *B) {
+bool StringsAreEqual(char *A, char *B)
+{
     while (*A && *A == *B) {
         ++A;
         ++B;
@@ -49,7 +50,8 @@ bool StringsAreEqual(char *A, char *B) {
 }
 
 static
-bool StringStartsWith(char *A, char *B) {
+bool StringStartsWith(char *A, char *B)
+{
     while (*B && *A == *B) {
         ++A;
         ++B;
@@ -58,8 +60,34 @@ bool StringStartsWith(char *A, char *B) {
     return *A == *B || *B == 0;
 }
 
+static inline
+void PrintHelp()
+{ printf(
+"Usage: %s [OPTION]... [DATE]...\n"
+/* TODO(lrak): description */
+"\n"
+"  -a, --all                  show the year 0000, a stand-in for all-time\n"
+"  -m, --month                show the month\n"
+"  -l, --last-month           like --months-ago=1\n"
+"      --months-ago=N         show the month from N months ago\n"
+"  -t, --template             show the template for the indicated month\n"
+"  -y, --year                 show the year\n"
+"  -L, --last-year            like --years-ago=1\n"
+"      --years-ago=N          show the year from N years ago\n"
+"\n"
+"  -n, --new-pay              create a new pay document\n"
+"  -p, --pay                  show the last pay document from this year\n"
+"\n"
+"  -c, --create               create the document if it does not exist\n"
+"  -e, --edit                 open the document in nvim\n"
+"  -h, --help                 show this usage document\n"
+, ProgramName
+); }
+
 static
-void ProcessFlag(char *Flag) {
+bool ProcessFlag(char *Flag)
+{
+    bool Terminal = 0;
     Assert(Flag);
 
     enum {
@@ -80,10 +108,6 @@ void ProcessFlag(char *Flag) {
     else if (StringsAreEqual(Flag, "new-pay")) {
         Flags.Record = RECORD_PAY;
         Flags.NewPay = 1;
-    }
-    else if (StringsAreEqual(Flag, "help")) {
-        printf("I.O.U. one help page. Sorry.\n");
-        /* TODO(lrak): print help */
     }
     else if (StringsAreEqual(Flag, "year")) {
         Flags.Any = 1;
@@ -122,8 +146,13 @@ void ProcessFlag(char *Flag) {
         Action = ACTION_MONTHS;
     }
     else {
-        /* TODO(lrak): error on unknown */
-        fprintf(stderr, "WARNING: unknown flag --%s\n", Flag);
+        if (!StringsAreEqual(Flag, "help")) {
+            fprintf(stderr, "WARNING: unknown flag --%s\n", Flag);
+            /* TODO(lrak): error on unknown? */
+        }
+
+        PrintHelp();
+        Terminal = 1;
     }
 
     switch (Action) {
@@ -168,10 +197,13 @@ void ProcessFlag(char *Flag) {
     case ACTION_NONE: break;
     InvalidDefaultCase;
     }
+
+    return Terminal;
 }
 
 static inline
-bool EnsureDirectory(char *Path) {
+bool EnsureDirectory(char *Path)
+{
     bool Success = false;
 
     /* TODO(lrak): don't do a fork */
@@ -279,7 +311,8 @@ char *DirName(char *Path, char *Out)
 }
 
 static
-void Copy(char *SourcePath, char *DestinationPath) {
+void Copy(char *SourcePath, char *DestinationPath)
+{
     /* TODO(lrak): return value */
     fd Template = open(SourcePath, O_RDONLY);
 
@@ -355,6 +388,7 @@ s32 main(s32 ArgCount, char **Args, char **Env)
     Month = (u32)Date->tm_mon + 1;
     Day   = (u32)Date->tm_mday;
 
+    bool Abort = 0;
     s32 ModifiedArgCount = 1;
     for (s32 Index = 1; Index < ArgCount; ++Index)
     {
@@ -368,22 +402,22 @@ s32 main(s32 ArgCount, char **Args, char **Env)
                     Armed = false;
                 }
                 else {
-                    ProcessFlag(Arg + 2);
+                    Abort |= ProcessFlag(Arg + 2);
                 }
             }
             else for (char *Cur = Arg + 1; *Cur; ++Cur) {
                 switch (*Cur) {
-                case 'a': ProcessFlag("all");        break;
-                case 'p': ProcessFlag("pay");        break;
-                case 'e': ProcessFlag("edit");       break;
-                case 'n': ProcessFlag("new-pay");    break;
-                case 'y': ProcessFlag("year");       break;
-                case 'm': ProcessFlag("month");      break;
-                case 'l': ProcessFlag("last-month"); break;
-                case 'L': ProcessFlag("last-year");  break;
-                case 'h': ProcessFlag("help");       break;
-                case 'c': ProcessFlag("create");     break;
-                case 't': ProcessFlag("template");   break;
+                case 'a': Abort |= ProcessFlag("all");        break;
+                case 'p': Abort |= ProcessFlag("pay");        break;
+                case 'e': Abort |= ProcessFlag("edit");       break;
+                case 'n': Abort |= ProcessFlag("new-pay");    break;
+                case 'y': Abort |= ProcessFlag("year");       break;
+                case 'm': Abort |= ProcessFlag("month");      break;
+                case 'l': Abort |= ProcessFlag("last-month"); break;
+                case 'L': Abort |= ProcessFlag("last-year");  break;
+                case 'h': Abort |= ProcessFlag("help");       break;
+                case 'c': Abort |= ProcessFlag("create");     break;
+                case 't': Abort |= ProcessFlag("template");   break;
 
                 default:
                     /* TODO(lrak): error on unknown */
@@ -399,84 +433,86 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         }
     }
 
-    if (Flags.Any || ModifiedArgCount == 1) switch (Flags.Record) {
-    case RECORD_MONTH:
-    case RECORD_YEAR: {
-        WritePath(DestinationPath, MaxPath, RootPath, Year, Month);
+    if (!Abort) {
+        if (Flags.Any || ModifiedArgCount == 1) switch (Flags.Record) {
+        case RECORD_MONTH:
+        case RECORD_YEAR: {
+            WritePath(DestinationPath, MaxPath, RootPath, Year, Month);
 
-        if (Flags.Edit || Flags.Create) {
-            if ((access(DestinationPath, F_OK) == -1)) {
-                WritePath(SourcePath, MaxPath, RootPath, 0, Month);
-                Copy(SourcePath, DestinationPath);
-            }
-        }
-
-        Delegate(DestinationPath, Flags.Edit);
-    } break;
-
-    case RECORD_TEMPLATE: {
-        WritePath(DestinationPath, MaxPath, RootPath, 0, Month);
-        Delegate(DestinationPath, Flags.Edit);
-    } break;
-
-    case RECORD_PAY: {
-        DIR *Pay;
-
-        WritePayDirPath(DestinationPath, MaxPath, RootPath, Year);
-
-        if (!EnsureDirectory(DestinationPath)) {
-            NotImplemented;
-        }
-        else if (!(Pay = opendir(DestinationPath))) {
-            NotImplemented;
-        }
-        else {
-            struct dirent *Dir;
-            u32 Number = 0;
-
-            while ((Dir = readdir(Pay))) {
-                if (StringStartsWith(Dir->d_name, ".")) continue;
-
-                char *Tail;
-                s64 ThisNumber = strtol(Dir->d_name, &Tail, 10);
-                if (ThisNumber > (s64)Number && (!*Tail || *Tail == '.')) {
-                    Number = (u32)ThisNumber;
-                }
-            }
-
-            closedir(Pay);
-
-            if (Flags.NewPay) {
-                Number += 1;
-            }
-
-            WritePayPath(DestinationPath, MaxPath, RootPath, Year, Number);
-
-            if (Flags.Edit || Flags.Create || Flags.NewPay) {
+            if (Flags.Edit || Flags.Create) {
                 if ((access(DestinationPath, F_OK) == -1)) {
-                    WritePayPath(SourcePath, MaxPath, RootPath, 0, 0);
+                    WritePath(SourcePath, MaxPath, RootPath, 0, Month);
                     Copy(SourcePath, DestinationPath);
                 }
             }
 
             Delegate(DestinationPath, Flags.Edit);
+        } break;
+
+        case RECORD_TEMPLATE: {
+            WritePath(DestinationPath, MaxPath, RootPath, 0, Month);
+            Delegate(DestinationPath, Flags.Edit);
+        } break;
+
+        case RECORD_PAY: {
+            DIR *Pay;
+
+            WritePayDirPath(DestinationPath, MaxPath, RootPath, Year);
+
+            if (!EnsureDirectory(DestinationPath)) {
+                NotImplemented;
+            }
+            else if (!(Pay = opendir(DestinationPath))) {
+                NotImplemented;
+            }
+            else {
+                struct dirent *Dir;
+                u32 Number = 0;
+
+                while ((Dir = readdir(Pay))) {
+                    if (StringStartsWith(Dir->d_name, ".")) continue;
+
+                    char *Tail;
+                    s64 ThisNumber = strtol(Dir->d_name, &Tail, 10);
+                    if (ThisNumber > (s64)Number && (!*Tail || *Tail == '.')) {
+                        Number = (u32)ThisNumber;
+                    }
+                }
+
+                closedir(Pay);
+
+                if (Flags.NewPay) {
+                    Number += 1;
+                }
+
+                WritePayPath(DestinationPath, MaxPath, RootPath, Year, Number);
+
+                if (Flags.Edit || Flags.Create || Flags.NewPay) {
+                    if ((access(DestinationPath, F_OK) == -1)) {
+                        WritePayPath(SourcePath, MaxPath, RootPath, 0, 0);
+                        Copy(SourcePath, DestinationPath);
+                    }
+                }
+
+                Delegate(DestinationPath, Flags.Edit);
+            }
+        } break;
+
+        InvalidDefaultCase;
         }
-    } break;
 
-    InvalidDefaultCase;
-    }
+        for (s32 Index = 1; Index < ModifiedArgCount; ++Index) {
+            char *Arg = Args[Index];
 
+            snprintf(DestinationPath, MaxPath, "%s/%s.tsv", RootPath, Arg);
 
-    for (s32 Index = 1; Index < ModifiedArgCount; ++Index) {
-        char *Arg = Args[Index];
+            if (Flags.Create) {
+                /* TODO(lrak): try to create this file if it doesn't exist */
+                NotImplemented;
+            }
 
-        snprintf(DestinationPath, MaxPath, "%s/%s.tsv", RootPath, Arg);
-
-        if (Flags.Create) {
-            /* TODO(lrak): try to create this file if it doesn't exist */
+            Delegate(DestinationPath, Flags.Edit);
         }
-
-        Delegate(DestinationPath, Flags.Edit);
     }
 
     return 0;
