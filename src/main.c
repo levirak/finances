@@ -70,13 +70,13 @@ void PrintHelp()
 "  -m, --month                show the month\n"
 "  -l, --last-month           like --months-ago=1\n"
 "      --months-ago=N         show the month from N months ago\n"
-"  -t, --template             show the template for the indicated month\n"
 "  -y, --year                 show the year\n"
 "  -L, --last-year            like --years-ago=1\n"
 "      --years-ago=N          show the year from N years ago\n"
+"  -t, --template             show the template for the indicated month\n"
 "\n"
-"  -n, --new-pay              create a new pay document\n"
 "  -p, --pay                  show the last pay document from this year\n"
+"  -n, --new-pay              create a new pay document\n"
 "\n"
 "  -c, --create               create the document if it does not exist\n"
 "  -e, --edit                 open the document in nvim\n"
@@ -102,13 +102,6 @@ bool ProcessFlag(char *Flag)
         Flags.Record = RECORD_YEAR;
         Year = 0;
     }
-    else if (StringsAreEqual(Flag, "edit")) {
-        Flags.Edit = 1;
-    }
-    else if (StringsAreEqual(Flag, "new-pay")) {
-        Flags.Record = RECORD_PAY;
-        Flags.NewPay = 1;
-    }
     else if (StringsAreEqual(Flag, "year")) {
         Flags.Any = 1;
         Flags.Record = RECORD_YEAR;
@@ -121,29 +114,36 @@ bool ProcessFlag(char *Flag)
             Year = Date->tm_year + 1900;
         }
     }
-    else if (StringsAreEqual(Flag, "pay")) {
-        Flags.Any = 1;
-        Flags.Record = RECORD_PAY;
-    }
-    else if (StringsAreEqual(Flag, "create")) {
-        Flags.Create = 1;
-    }
     else if (StringsAreEqual(Flag, "last-month")) {
         Flag = "months-ago=1";
+        Action = ACTION_MONTHS;
+    }
+    else if (StringStartsWith(Flag, "months-ago=")) {
         Action = ACTION_MONTHS;
     }
     else if (StringsAreEqual(Flag, "last-year")) {
         Flag = "years-ago=1";
         Action = ACTION_YEARS;
     }
-    else if (StringsAreEqual(Flag, "template")) {
-        Action = ACTION_TEMPLATE;
-    }
     else if (StringStartsWith(Flag, "years-ago=")) {
         Action = ACTION_YEARS;
     }
-    else if (StringStartsWith(Flag, "months-ago=")) {
-        Action = ACTION_MONTHS;
+    else if (StringsAreEqual(Flag, "template")) {
+        Action = ACTION_TEMPLATE;
+    }
+    else if (StringsAreEqual(Flag, "pay")) {
+        Flags.Any = 1;
+        Flags.Record = RECORD_PAY;
+    }
+    else if (StringsAreEqual(Flag, "new-pay")) {
+        Flags.Record = RECORD_PAY;
+        Flags.NewPay = 1;
+    }
+    else if (StringsAreEqual(Flag, "create")) {
+        Flags.Create = 1;
+    }
+    else if (StringsAreEqual(Flag, "edit")) {
+        Flags.Edit = 1;
     }
     else {
         if (!StringsAreEqual(Flag, "help")) {
@@ -242,10 +242,10 @@ void Delegate(char *Path, bool Edit)
     if (Id == 0) {
         /* child, becomes some other program */
         if (Edit) {
-            execlp("nvim", ProgramName, "+/^$/-1", Path, NULL);
+            execlp("nvim", ProgramName, "+$?^$?-1", Path, NULL);
         }
         else {
-            execlp("spreadsheet", ProgramName, Path, NULL);
+            execlp("ledger", ProgramName, Path, NULL);
         }
 
         Unreachable;
@@ -376,10 +376,6 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         return -1;
     }
 
-    char *Finances = "Documents/Finances";
-    snprintf(RootPath, sizeof RootPath, "%s/%s", Home, Finances);
-
-
 
     time_t UnixTime = time(0);
     Date = localtime(&UnixTime);
@@ -407,17 +403,17 @@ s32 main(s32 ArgCount, char **Args, char **Env)
             }
             else for (char *Cur = Arg + 1; *Cur; ++Cur) {
                 switch (*Cur) {
-                case 'a': Abort |= ProcessFlag("all");        break;
-                case 'p': Abort |= ProcessFlag("pay");        break;
-                case 'e': Abort |= ProcessFlag("edit");       break;
-                case 'n': Abort |= ProcessFlag("new-pay");    break;
-                case 'y': Abort |= ProcessFlag("year");       break;
-                case 'm': Abort |= ProcessFlag("month");      break;
+                case 'a': Abort |= ProcessFlag("all"); break;
+                case 'p': Abort |= ProcessFlag("pay"); break;
+                case 'e': Abort |= ProcessFlag("edit"); break;
+                case 'n': Abort |= ProcessFlag("new-pay"); break;
+                case 'y': Abort |= ProcessFlag("year"); break;
+                case 'm': Abort |= ProcessFlag("month"); break;
                 case 'l': Abort |= ProcessFlag("last-month"); break;
-                case 'L': Abort |= ProcessFlag("last-year");  break;
-                case 'h': Abort |= ProcessFlag("help");       break;
-                case 'c': Abort |= ProcessFlag("create");     break;
-                case 't': Abort |= ProcessFlag("template");   break;
+                case 'L': Abort |= ProcessFlag("last-year"); break;
+                case 'h': Abort |= ProcessFlag("help"); break;
+                case 'c': Abort |= ProcessFlag("create"); break;
+                case 't': Abort |= ProcessFlag("template"); break;
 
                 default:
                     /* TODO(lrak): error on unknown */
@@ -434,6 +430,9 @@ s32 main(s32 ArgCount, char **Args, char **Env)
     }
 
     if (!Abort) {
+        char *Finances = "Documents/Finances";
+        snprintf(RootPath, sizeof RootPath, "%s/%s", Home, Finances);
+
         if (Flags.Any || ModifiedArgCount == 1) switch (Flags.Record) {
         case RECORD_MONTH:
         case RECORD_YEAR: {
