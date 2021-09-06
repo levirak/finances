@@ -231,6 +231,24 @@ bool EnsureDirectory(char *Path)
 }
 
 static
+void Commit(char *Message)
+{
+    /* put a space between multiple calls */
+    pid_t Id = fork();
+    if (Id == 0) {
+        /* child, becomes some other program */
+        execlp("git", "git", "commit", "-qam", Message, NULL);
+        Unreachable;
+    }
+    else {
+        /* parent, waits for child to finish */
+        if (waitpid(Id, 0, 0) < 0) {
+            NotImplemented;
+        }
+    }
+}
+
+static
 void Delegate(char *Path, bool Edit)
 {
     static s32 NumPrinted = 0;
@@ -242,44 +260,50 @@ void Delegate(char *Path, bool Edit)
     if (Id == 0) {
         /* child, becomes some other program */
         if (Edit) {
-            execlp("nvim", ProgramName, "+$?^$?-1", Path, NULL);
+            execlp("nvim", "nvim", "+$?^$?-1", Path, NULL);
+            Unreachable;
         }
         else {
-            execlp("ledger", ProgramName, Path, NULL);
+            execlp("ledger", "ledger", Path, NULL);
+            Unreachable;
         }
-
         Unreachable;
     }
     else {
         /* parent, waits for child to finish */
-
         if (waitpid(Id, 0, 0) < 0) {
             NotImplemented;
+        }
+
+        if (Edit) {
+            char Message[MaxPath + 8];
+            snprintf(Message, sizeof Message, "Edited %s", Path);
+            Commit(Message);
         }
     }
 }
 
 static
-void WritePath(char *Buffer, mm BufSize, char *Root, s32 Year, s32 Month)
+void WritePath(char *Buffer, mm BufSize, s32 Year, s32 Month)
 {
     if (Flags.Record == RECORD_YEAR) {
-        snprintf(Buffer, BufSize, "%s/%04d.tsv", Root, Year);
+        snprintf(Buffer, BufSize, "./%04d.tsv", Year);
     }
     else {
-        snprintf(Buffer, BufSize, "%s/%04d/%02d.tsv", Root, Year, Month);
+        snprintf(Buffer, BufSize, "./%04d/%02d.tsv", Year, Month);
     }
 }
 
 static
-void WritePayDirPath(char *Buffer, mm BufSize, char *Root, s32 Year)
+void WritePayDirPath(char *Buffer, mm BufSize, s32 Year)
 {
-    snprintf(Buffer, BufSize, "%s/%04d/pay", Root, Year);
+    snprintf(Buffer, BufSize, "./%04d/pay", Year);
 }
 
 static
-void WritePayPath(char *Buffer, mm BufSize, char *Root, s32 Year, s32 Number)
+void WritePayPath(char *Buffer, mm BufSize, s32 Year, s32 Number)
 {
-    snprintf(Buffer, BufSize, "%s/%04d/pay/%02d.tsv", Root, Year, Number);
+    snprintf(Buffer, BufSize, "./%04d/pay/%02d.tsv", Year, Number);
 }
 
 /* NOTE: assums that `Out` is at least as big as `Path` */
@@ -359,7 +383,6 @@ s32 main(s32 ArgCount, char **Args, char **Env)
 {
     char *Home = 0;
 
-    static char RootPath[512] = "";
     static char SourcePath[MaxPath];
     static char DestinationPath[MaxPath];
 
@@ -430,17 +453,18 @@ s32 main(s32 ArgCount, char **Args, char **Env)
     }
 
     if (!Abort) {
-        char *Finances = "Documents/Finances";
-        snprintf(RootPath, sizeof RootPath, "%s/%s", Home, Finances);
+        char RootPath[512] = "";
+        snprintf(RootPath, sizeof RootPath, "%s/Documents/Finances", Home);
+        CheckEq(chdir(RootPath), 0);
 
         if (Flags.Any || ModifiedArgCount == 1) switch (Flags.Record) {
         case RECORD_MONTH:
         case RECORD_YEAR: {
-            WritePath(DestinationPath, MaxPath, RootPath, Year, Month);
+            WritePath(DestinationPath, MaxPath, Year, Month);
 
             if (Flags.Edit || Flags.Create) {
                 if ((access(DestinationPath, F_OK) == -1)) {
-                    WritePath(SourcePath, MaxPath, RootPath, 0, Month);
+                    WritePath(SourcePath, MaxPath, 0, Month);
                     Copy(SourcePath, DestinationPath);
                 }
             }
@@ -449,14 +473,14 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         } break;
 
         case RECORD_TEMPLATE: {
-            WritePath(DestinationPath, MaxPath, RootPath, 0, Month);
+            WritePath(DestinationPath, MaxPath, 0, Month);
             Delegate(DestinationPath, Flags.Edit);
         } break;
 
         case RECORD_PAY: {
             DIR *Pay;
 
-            WritePayDirPath(DestinationPath, MaxPath, RootPath, Year);
+            WritePayDirPath(DestinationPath, MaxPath, Year);
 
             if (!EnsureDirectory(DestinationPath)) {
                 NotImplemented;
@@ -484,11 +508,11 @@ s32 main(s32 ArgCount, char **Args, char **Env)
                     Number += 1;
                 }
 
-                WritePayPath(DestinationPath, MaxPath, RootPath, Year, Number);
+                WritePayPath(DestinationPath, MaxPath, Year, Number);
 
                 if (Flags.Edit || Flags.Create || Flags.NewPay) {
                     if ((access(DestinationPath, F_OK) == -1)) {
-                        WritePayPath(SourcePath, MaxPath, RootPath, 0, 0);
+                        WritePayPath(SourcePath, MaxPath, 0, 0);
                         Copy(SourcePath, DestinationPath);
                     }
                 }
@@ -503,7 +527,7 @@ s32 main(s32 ArgCount, char **Args, char **Env)
         for (s32 Index = 1; Index < ModifiedArgCount; ++Index) {
             char *Arg = Args[Index];
 
-            snprintf(DestinationPath, MaxPath, "%s/%s.tsv", RootPath, Arg);
+            snprintf(DestinationPath, MaxPath, "./%s.tsv", Arg);
 
             if (Flags.Create) {
                 /* TODO(lrak): try to create this file if it doesn't exist */
