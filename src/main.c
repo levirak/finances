@@ -237,13 +237,25 @@ void Commit(char *Message)
     pid_t Id = fork();
     if (Id == 0) {
         /* child, becomes some other program */
-        execlp("git", "git", "commit", "-qam", Message, NULL);
+        execlp("git", "git", "add", ".", NULL);
         Unreachable;
     }
     else {
         /* parent, waits for child to finish */
         if (waitpid(Id, 0, 0) < 0) {
             NotImplemented;
+        }
+
+        if ((Id = fork()) == 0) {
+            /* child, becomes some other program */
+            execlp("git", "git", "commit", "-qm", Message, NULL);
+            Unreachable;
+        }
+        else {
+            /* parent, waits for child to finish */
+            if (waitpid(Id, 0, 0) < 0) {
+                NotImplemented;
+            }
         }
     }
 }
@@ -264,7 +276,7 @@ void Delegate(char *Path, bool Edit)
             Unreachable;
         }
         else {
-            execlp("ledger", "ledger", Path, NULL);
+            execlp("tabulate", "tabulate", Path, NULL);
             Unreachable;
         }
         Unreachable;
